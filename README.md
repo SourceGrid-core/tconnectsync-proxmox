@@ -9,10 +9,10 @@ The installer runs on a **Proxmox VE node**, not inside a pre-existing LXC. It c
 From a root shell on the Proxmox node, run this single command:
 
 ```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/SourceGrid-core/tconnectsync-proxmox/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/SourceGrid-core/tconnectsync-proxmox/sourcegrid-core-proxmox-lxc-deployment/install.sh)"
 ```
 
-The repository is public so this raw installer link works without GitHub credentials or a pre-existing clone. The short bootstrap downloads the package archive from this repository's `main` branch into a temporary directory, then runs the full interactive installer. Do not pipe a downloaded script into a shell unless you trust its source; review [`install.sh`](install.sh) and [`scripts/provision-proxmox.sh`](scripts/provision-proxmox.sh) first if desired.
+The repository is public so this raw installer link works without GitHub credentials or a pre-existing clone. The short bootstrap downloads the package archive from the installer branch into a temporary directory, then runs the full interactive installer. After the changes land on `main`, the command can use `main/install.sh` instead. Do not pipe a downloaded script into a shell unless you trust its source; review [`install.sh`](install.sh) and [`scripts/provision-proxmox.sh`](scripts/provision-proxmox.sh) first if desired.
 
 The installer requires a Proxmox VE host shell, root privileges, `curl`, `tar`, and working Proxmox package repositories/internet access. It checks for the Proxmox tools before provisioning.
 

@@ -11,7 +11,8 @@ fail() {
 command -v curl >/dev/null || fail "curl is required."
 command -v tar >/dev/null || fail "tar is required."
 
-repo_archive="https://github.com/SourceGrid-core/tconnectsync-proxmox/archive/refs/heads/main.tar.gz"
+repo_ref="sourcegrid-core-proxmox-lxc-deployment"
+repo_archive="https://github.com/SourceGrid-core/tconnectsync-proxmox/archive/refs/heads/${repo_ref}.tar.gz"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/tconnectsync-install.XXXXXX")"
 cleanup() {
     rm -rf -- "${temp_dir}"
@@ -24,7 +25,7 @@ curl --fail --silent --show-error --location --retry 3 \
     "${repo_archive}" --output "${archive}"
 tar -xzf "${archive}" -C "${temp_dir}"
 
-installer="${temp_dir}/tconnectsync-proxmox-main/scripts/provision-proxmox.sh"
+installer="${temp_dir}/tconnectsync-proxmox-${repo_ref}/scripts/provision-proxmox.sh"
 [[ -f "${installer}" ]] || fail "The downloaded package does not contain the Proxmox installer."
 
 if bash "${installer}" "$@"; then
