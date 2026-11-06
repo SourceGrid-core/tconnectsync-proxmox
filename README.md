@@ -2,97 +2,73 @@
 
 This repository packages the upstream [`jwoglom/tconnectsync`](https://github.com/jwoglom/tconnectsync) Python application for a Debian Linux Container (LXC) on Proxmox VE. It installs the published `tconnectsync` package into an isolated Python virtual environment and runs it as a native systemd service. The upstream application is not copied or modified here.
 
-## Proxmox prerequisites
+## Create and deploy the whole container
 
-- Create a Debian 12 or newer LXC with systemd as its init system. An unprivileged container is recommended.
-- Enable start-at-boot if desired. Docker, nesting, privileged mode, USB devices, and host filesystem mounts are not required.
-- Allow outbound DNS and HTTPS (TCP 443) to Tandem and your Nightscout host.
-- Set the container's system timezone if you want its system logs to use that zone. Separately, `TIMEZONE_NAME` below must match the timezone configured on your pump.
+The provisioner runs on a **Proxmox VE node**, not inside a pre-existing LXC. It creates a new, unprivileged Debian 12 LXC, installs the upstream application and systemd service, writes your configuration with restricted permissions, and starts the service. It will never overwrite or delete an existing container.
 
-## Install
+Before provisioning:
 
-Run these commands inside the new container. The deployment repository can be cloned over SSH or HTTPS by an account authorized for the private repository.
+- In the Proxmox UI, download a Debian 12 standard LXC template to a storage that supports container templates. The script asks for its full ID, for example `local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst`.
+- Ensure the selected root filesystem storage has at least 8 GB available and the node has a network bridge (commonly `vmbr0`) connected to a network with DHCP and outbound DNS/HTTPS.
+- Put an OpenSSH public key on the Proxmox node for your administration account. The script installs it as the container's root SSH key; it does not set a root password.
+- Have a local checkout of this private repository on the Proxmox node. The repository contents are bundled to the new container, so it does not need GitHub credentials.
 
-```sh
-git clone https://github.com/SourceGrid-core/tconnectsync-proxmox.git
-cd tconnectsync-proxmox
-sudo ./scripts/install-debian.sh
-```
-
-The installer installs Debian's Python and timezone packages, creates a locked-down `tconnectsync` system account and virtual environment, installs the current `tconnectsync` release from PyPI, installs the systemd unit and a private configuration file, and enables (but does not start) the service.
-
-Edit `/etc/tconnectsync/tconnectsync.env` locally in the container. It is installed as `root:tconnectsync` with mode `0640`; keep it that way and do not commit it, paste it into tickets, or include it in logs. The configuration names and formats are:
-
-```ini
-TCONNECT_EMAIL=
-TCONNECT_PASSWORD=
-TCONNECT_REGION=US
-NS_URL=
-NS_SECRET=
-TIMEZONE_NAME=America/New_York
-# Optional numeric pump serial:
-# PUMP_SERIAL_NUMBER=
-```
-
-Set `TCONNECT_REGION` to `US` or `EU`. Use a timezone database name such as `America/New_York` for `TIMEZONE_NAME`, and use your pump's configured timezone. `PUMP_SERIAL_NUMBER` is optional; omit it unless you need to select a specific pump. The app otherwise selects the most recently used pump.
-
-The service reads this file directly through systemd; do not `source` it as a shell script. Keep values on one line. If a value contains whitespace, use systemd-compatible quoting. The credentials are never needed in this deployment repository.
-
-Check the configuration without connecting to either service, then start the synchronizer:
+From the Proxmox node shell, run:
 
 ```sh
-sudo /opt/tconnectsync/venv/bin/python /usr/local/libexec/tconnectsync/check-config.py
-sudo systemctl start tconnectsync
-sudo systemctl status tconnectsync --no-pager
-sudo journalctl -u tconnectsync -n 100 --no-pager
+cd /path/to/tconnectsync-proxmox
+sudo bash scripts/provision-proxmox.sh
 ```
 
-The same configuration check runs before every service start. It checks that the required values are present, region and optional serial number are valid, the Nightscout URL is an HTTP(S) URL, and the timezone exists. It does not authenticate or contact Tandem or Nightscout. Do not share journal output without checking it for private account or health information.
+The script selects the next free CT ID, asks for the template, storage, bridge, network configuration, and SSH public-key path, then shows a confirmation before creating the CT. Defaults are 1 CPU core, 1 GiB RAM, 512 MiB swap, 8 GiB root disk, DHCP, and start-at-boot. For a static IPv4 setup, enter a full `net0` value such as `name=eth0,bridge=vmbr0,ip=192.0.2.20/24,gw=192.0.2.1`.
+
+It then prompts for `TCONNECT_EMAIL`, `TCONNECT_PASSWORD`, `TCONNECT_REGION`, `NS_URL`, `NS_SECRET`, `TIMEZONE_NAME`, and optional `PUMP_SERIAL_NUMBER`. Password and API secret input is hidden. Credentials are written to a mode-`0600` temporary file on the Proxmox node, pushed into the new CT, and installed as `/etc/tconnectsync/tconnectsync.env` (`root:tconnectsync`, mode `0640`). The host-side temporary files are removed on exit; secrets are never supplied as command-line arguments or committed to this repository. Do not enable shell tracing while running the script.
+
+`TCONNECT_REGION` must be `US` or `EU`. `TIMEZONE_NAME` must be a timezone database name matching the pump's timezone. Leave `PUMP_SERIAL_NUMBER` empty to let the app select the most recently used pump. The configuration validator checks required fields, URL, region, timezone, and serial format before the service starts; it does not authenticate or connect to either service.
+
+The CT is intentionally left in place if any step fails after creation; inspect it rather than rerunning the provisioner blindly. On success, the script prints the CT ID and service status/log commands. The app will begin contacting Tandem and Nightscout after systemd starts it.
 
 ## Service operations
 
 ```sh
-sudo systemctl stop tconnectsync
-sudo systemctl restart tconnectsync
-sudo systemctl enable tconnectsync       # start automatically at container boot
-sudo systemctl disable tconnectsync
-sudo journalctl -u tconnectsync -f
+sudo pct exec <CTID> -- systemctl stop tconnectsync
+sudo pct exec <CTID> -- systemctl restart tconnectsync
+sudo pct exec <CTID> -- systemctl enable tconnectsync       # start automatically at container boot
+sudo pct exec <CTID> -- systemctl disable tconnectsync
+sudo pct exec <CTID> -- journalctl -u tconnectsync -f
 ```
 
 The service runs `tconnectsync --auto-update`, which keeps polling upstream for new events. The application writes its credential cache, if enabled by upstream defaults, under `/var/lib/tconnectsync/.config/tconnectsync/`; that directory is private to the service account and persists across service restarts and package updates.
 
 ## Update the upstream application
 
-From a terminal inside the container, run the companion update script:
+From the Proxmox node, use `pct exec` to update the upstream package inside the container:
 
 ```sh
-cd /path/to/tconnectsync-proxmox
-sudo ./scripts/update.sh
+sudo pct exec <CTID> -- bash /opt/tconnectsync-deployment/scripts/update.sh
 ```
 
 It upgrades the PyPI package in the isolated virtual environment and restarts the service. This updates only the upstream application installed in the container; it does not change this deployment repository or the upstream GitHub repository.
 
-To update these deployment files, pull the private repository in your checkout, then rerun the installer if the service unit or configuration template changed:
+To update these deployment files, pull the private repository on the Proxmox node, then use its host-side updater to send the latest files into the running CT and rerun the installer. Existing configuration is preserved:
 
 ```sh
 cd /path/to/tconnectsync-proxmox
 git pull --ff-only
-sudo ./scripts/install-debian.sh
+sudo bash scripts/update-container.sh <CTID>
 ```
 
 The installer preserves an existing local configuration file and does not print its contents.
 
 ## Uninstall
 
-Stop and disable the unit, then remove the unit and service account data only if you no longer need them:
+Stop and disable the service inside the CT:
 
 ```sh
-sudo systemctl disable --now tconnectsync
-sudo rm /etc/systemd/system/tconnectsync.service
-sudo systemctl daemon-reload
+sudo pct exec <CTID> -- systemctl disable --now tconnectsync
 ```
 
-The remaining configuration and cache contain private credentials/tokens. Remove `/etc/tconnectsync` and `/var/lib/tconnectsync` yourself only after deciding you no longer need them.
+This intentionally does not destroy the container or delete its data. If you later decide to remove the CT, verify the CT ID and delete it through the Proxmox UI or `pct destroy <CTID>`; that removes the configuration, credential cache, and all other data in that container.
 
 ## Scope and safety
 
@@ -104,5 +80,5 @@ The local configuration checks can be tested without real credentials or network
 
 ```sh
 python3 -m unittest discover -s tests -v
-bash -n scripts/install-debian.sh scripts/update.sh
+bash -n scripts/provision-proxmox.sh scripts/update-container.sh scripts/install-debian.sh scripts/update.sh
 ```
