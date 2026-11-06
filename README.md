@@ -12,7 +12,7 @@ From a root shell on the Proxmox node, run this single command:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SourceGrid-core/tconnectsync-proxmox/sourcegrid-core-proxmox-lxc-deployment/install.sh)"
 ```
 
-The repository is public so this raw installer link works without GitHub credentials or a pre-existing clone. The short bootstrap downloads the package archive from the installer branch into a temporary directory, then runs the full interactive installer. After the changes land on `main`, the command can use `main/install.sh` instead. Do not pipe a downloaded script into a shell unless you trust its source; review [`install.sh`](install.sh) and [`scripts/provision-proxmox.sh`](scripts/provision-proxmox.sh) first if desired.
+The repository is public so this raw installer link works without GitHub credentials or a pre-existing clone. The bootstrap downloads the deployment package from a pinned commit using `codeload.github.com`, checks the archive's SHA-256 digest, and then runs the interactive installer. If codeload is unreachable, it fetches the individual files from `raw.githubusercontent.com` and verifies each against a pinned SHA-256 digest. It does not use `github.com` archive URLs, disable TLS verification, or execute unverified downloads. Do not pipe a downloaded script into a shell unless you trust its source; review [`install.sh`](install.sh) and [`scripts/provision-proxmox.sh`](scripts/provision-proxmox.sh) first if desired.
 
 The installer requires a Proxmox VE host shell, root privileges, `curl`, `tar`, and working Proxmox package repositories/internet access. It checks for the Proxmox tools before provisioning.
 
@@ -77,6 +77,7 @@ This intentionally does not destroy the container or delete its data. If you lat
 ## Troubleshooting
 
 - **Template catalog unavailable:** check Proxmox node DNS/internet and configured Proxmox repositories; run `pveam update` and `pveam available --section system` on the node.
+- **Installer download fails:** the bootstrap first downloads a pinned, SHA-256-verified archive from `codeload.github.com`, then falls back to individually pinned files from `raw.githubusercontent.com`. If both hosts are blocked, no provisioning command runs and no CT is created; allow HTTPS access to either host and retry.
 - **Template download/storage error:** verify that the template storage supports `vztmpl` content and the root filesystem storage supports container disks (`rootdir` content). These are often different storages.
 - **CT fails to start or has no address:** inspect `pct status <CTID>`, `pct config <CTID>`, and the selected bridge, gateway, DHCP service, and firewall rules.
 - **Service failed:** run `pct exec <CTID> -- systemctl status tconnectsync --no-pager` and `pct exec <CTID> -- journalctl -u tconnectsync -n 100 --no-pager`. Check local config permissions and spelling without sharing secrets or logs publicly.
