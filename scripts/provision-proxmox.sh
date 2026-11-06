@@ -8,8 +8,10 @@ fail() {
 }
 
 [[ "${EUID}" -eq 0 ]] || fail "Run on a Proxmox VE node as root."
-command -v pct >/dev/null || fail "pct is unavailable; run this on a Proxmox VE node."
-command -v pvesh >/dev/null || fail "pvesh is unavailable; run this on a Proxmox VE node."
+for command_name in pct pvesh pveam pvesm ip; do
+    command -v "${command_name}" >/dev/null ||
+        fail "${command_name} is unavailable; run this on a Proxmox VE node."
+done
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "${script_dir}/.." && pwd)"
@@ -27,30 +29,74 @@ read_value() {
 
 read_secret() {
     local prompt="$1" value
-    read -r -s -p "${prompt}: " value
+    read -r -s -p "${prompt} (input hidden): " value
     printf '\n' >&2
     printf '%s' "${value}"
 }
 
-template="$(read_value 'Debian 12+ template (storage:vztmpl/file.tar.zst)' '')"
-[[ "${template}" =~ ^[A-Za-z0-9._-]+:vztmpl/debian-1[2-9]-standard_[A-Za-z0-9._-]+\.tar\.(zst|gz|xz)$ ]] ||
-    fail "Use a Debian 12 or newer standard template ID, such as local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst."
-storage="$(read_value 'Root filesystem storage ID' 'local-lvm')"
-[[ "${storage}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid storage ID."
-bridge="$(read_value 'Proxmox network bridge' 'vmbr0')"
+echo "Available Proxmox storages:"
+pvesm status
+template_storage="$(read_value 'Storage for the Debian LXC template' 'local')"
+[[ "${template_storage}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid template storage ID."
+storage="$(read_value 'Root filesystem storage ID (must support container root disks)' '')"
+[[ "${storage}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Enter a valid root filesystem storage ID."
+
+echo "Refreshing Proxmox's official system template catalog..."
+pveam update
+available_templates="$(pveam available --section system)"
+mapfile -t debian_templates < <(
+    printf '%s\n' "${available_templates}" |
+        grep -oE 'debian-12-standard_[A-Za-z0-9._-]+\.tar\.(zst|gz|xz)' |
+        sort -Vu
+)
+(( ${#debian_templates[@]} > 0 )) ||
+    fail "No Debian 12 standard template was listed. Check Proxmox repository/network access and run 'pveam available --section system'."
+template_name="${debian_templates[-1]}"
+echo "Latest Debian 12 standard template: ${template_name}"
+use_latest="$(read_value 'Use this template? (y/n)' 'y')"
+if [[ "${use_latest,,}" == "n" ]]; then
+    printf '%s\n' "${debian_templates[@]}"
+    template_name="$(read_value 'Enter an exact Debian 12 template filename from the list above' "${template_name}")"
+    printf '%s\n' "${debian_templates[@]}" | grep -Fxq "${template_name}" ||
+        fail "Select one of the listed Debian 12 templates."
+elif [[ "${use_latest,,}" != "y" ]]; then
+    fail "Answer y or n."
+fi
+if ! pveam list "${template_storage}" | grep -Fq "vztmpl/${template_name}"; then
+    echo "Downloading ${template_name} to ${template_storage}..."
+    pveam download "${template_storage}" "${template_name}"
+fi
+template="${template_storage}:vztmpl/${template_name}"
+
+echo "Available network bridges:"
+ip -brief link show type bridge || true
+default_bridge="$(ip -o link show type bridge | awk -F': ' 'NR == 1 {sub(/@.*/, "", $2); print $2}')"
+bridge="$(read_value 'Proxmox network bridge' "${default_bridge}")"
 [[ "${bridge}" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid bridge name."
+[[ -d "/sys/class/net/${bridge}/bridge" ]] || fail "Bridge ${bridge} does not exist on this Proxmox node."
 net_config="$(read_value 'Container net0 configuration' "name=eth0,bridge=${bridge},ip=dhcp")"
 [[ "${net_config}" != *$'\n'* ]] || fail "Network configuration must be a single line."
 ssh_key="$(read_value 'Path to an SSH public key on this Proxmox node' '')"
 [[ -r "${ssh_key}" ]] || fail "The SSH public key file is not readable."
 grep -Eq '^(ssh-|ecdsa-|sk-ssh-)[^[:space:]]+[[:space:]]' "${ssh_key}" ||
     fail "The key file does not look like an OpenSSH public key."
+cores="$(read_value 'Container CPU cores' '1')"
+memory="$(read_value 'Container memory in MiB' '1024')"
+swap="$(read_value 'Container swap in MiB' '512')"
+disk_size="$(read_value 'Container root disk size in GiB' '8')"
+[[ "${cores}" =~ ^[1-9][0-9]*$ ]] || fail "CPU cores must be a positive integer."
+[[ "${memory}" =~ ^[0-9]+$ && "${memory}" -ge 512 ]] ||
+    fail "Container memory must be at least 512 MiB."
+[[ "${swap}" =~ ^[0-9]+$ ]] || fail "Container swap must be a non-negative integer."
+[[ "${disk_size}" =~ ^[0-9]+$ && "${disk_size}" -ge 4 ]] ||
+    fail "Container root disk must be at least 4 GiB."
 
 ctid="$(pvesh get /cluster/nextid)"
 [[ "${ctid}" =~ ^[0-9]+$ && "${ctid}" -ge 100 ]] || fail "Proxmox returned an invalid next container ID."
 [[ ! -e "/etc/pve/lxc/${ctid}.conf" ]] || fail "Container ${ctid} already exists; refusing to modify it."
 
-echo "Provisioning new Debian LXC ${ctid} from ${template}."
+echo "Provisioning new Debian 12 LXC ${ctid} from ${template}."
+echo "Root filesystem: ${storage}, ${disk_size} GiB; CPU: ${cores} core(s); memory: ${memory} MiB; swap: ${swap} MiB."
 echo "This script will not overwrite or delete an existing container."
 echo "After configuration, it will start tconnectsync and begin syncing to the Nightscout URL you provide."
 read -r -p "Continue? [y/N]: " confirmation
@@ -120,10 +166,10 @@ pct create "${ctid}" "${template}" \
     --hostname tconnectsync \
     --ostype debian \
     --unprivileged 1 \
-    --cores 1 \
-    --memory 1024 \
-    --swap 512 \
-    --rootfs "${storage}:8" \
+    --cores "${cores}" \
+    --memory "${memory}" \
+    --swap "${swap}" \
+    --rootfs "${storage}:${disk_size}" \
     --net0 "${net_config}" \
     --onboot 1 \
     --startup order=3 \
@@ -153,10 +199,14 @@ pct exec "${ctid}" -- systemctl start tconnectsync.service
 sleep 5
 
 echo
-echo "Container ${ctid} was created and configured."
+echo "Container ${ctid} was created; checking service status."
 echo "Check status: pct exec ${ctid} -- systemctl status tconnectsync --no-pager"
 echo "View logs:    pct exec ${ctid} -- journalctl -u tconnectsync -n 100 --no-pager"
+echo "Container networking:"
+pct exec "${ctid}" -- ip -brief address show || true
 if ! pct exec "${ctid}" -- systemctl is-active --quiet tconnectsync.service; then
     echo "The service is not active yet; the container was left intact. Inspect its journal." >&2
     exit 1
 fi
+echo "systemd reports tconnectsync active in CT ${ctid}."
+echo "This confirms the process is running, not that provider authentication or uploads succeeded."

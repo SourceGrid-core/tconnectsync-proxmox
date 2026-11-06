@@ -29,6 +29,7 @@ venv_dir="/opt/${service_name}/venv"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
+    openssh-server \
     python3 \
     python3-venv \
     tzdata
@@ -65,6 +66,17 @@ install -o root -g root -m 0644 "${repo_dir}/scripts/check-config.py" \
     "/usr/local/libexec/${service_name}/check-config.py"
 install -o root -g root -m 0644 "${repo_dir}/systemd/${service_name}.service" \
     "/etc/systemd/system/${service_name}.service"
+
+install -d -o root -g root -m 0755 /etc/ssh/sshd_config.d
+cat >/etc/ssh/sshd_config.d/60-tconnectsync-proxmox.conf <<'EOF'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+EOF
+chmod 0644 /etc/ssh/sshd_config.d/60-tconnectsync-proxmox.conf
+sshd -t
+systemctl enable --now ssh.service
 
 systemctl daemon-reload
 systemctl enable "${service_name}.service"
