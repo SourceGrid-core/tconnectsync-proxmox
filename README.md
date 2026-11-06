@@ -2,24 +2,27 @@
 
 This repository packages the upstream [`jwoglom/tconnectsync`](https://github.com/jwoglom/tconnectsync) Python application for a Debian Linux Container (LXC) on Proxmox VE. It installs the published `tconnectsync` package into an isolated Python virtual environment and runs it as a native systemd service. The upstream application is not copied or modified here.
 
-## Create and deploy the whole container
+## One-command Proxmox install
 
-The provisioner runs on a **Proxmox VE node**, not inside a pre-existing LXC. It creates a new, unprivileged Debian 12 LXC, installs the upstream application and systemd service, writes your configuration with restricted permissions, and starts the service. It will never overwrite or delete an existing container.
+The installer runs on a **Proxmox VE node**, not inside a pre-existing LXC. It creates a new, unprivileged Debian 12 LXC, installs the upstream application and systemd service, writes your configuration with restricted permissions, and starts the service. It will never overwrite or delete an existing container.
 
-Before provisioning:
+From a root shell on the Proxmox node, run this single command:
+
+```sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/SourceGrid-core/tconnectsync-proxmox/main/install.sh)"
+```
+
+The repository is public so this raw installer link works without GitHub credentials or a pre-existing clone. The short bootstrap downloads the package archive from this repository's `main` branch into a temporary directory, then runs the full interactive installer. Do not pipe a downloaded script into a shell unless you trust its source; review [`install.sh`](install.sh) and [`scripts/provision-proxmox.sh`](scripts/provision-proxmox.sh) first if desired.
+
+The installer requires a Proxmox VE host shell, root privileges, `curl`, `tar`, and working Proxmox package repositories/internet access. It checks for the Proxmox tools before provisioning.
+
+Before installing:
 
 - Use a Proxmox VE node with working Proxmox package repositories, outbound internet access, and available `pct`, `pvesh`, `pveam`, and `pvesm` commands. Run the workflow from the node shell as root (or with `sudo`).
 - Ensure the selected root filesystem storage supports container root disks and has at least 8 GB available. The script lists configured storages and asks separately where to store the template (commonly `local`) and the container disk (commonly `local-lvm`).
 - Ensure the node has a network bridge (commonly `vmbr0`) connected to a network with DHCP and outbound DNS/HTTPS. Static IPv4 settings can be entered at the prompt instead.
 - Put an OpenSSH public key on the Proxmox node for your administration account. The script installs it as the container's root SSH key; the installer enables OpenSSH with public-key authentication only and does not set a root password.
-- Have a local checkout of this private repository on the Proxmox node. The repository contents are bundled to the new container, so it does not need GitHub credentials.
-
-From the Proxmox node shell, run:
-
-```sh
-cd /path/to/tconnectsync-proxmox
-sudo bash scripts/provision-proxmox.sh
-```
+- Have an SSH public key on the Proxmox node. You do not need to clone this repository; the installer downloads the deployment files itself.
 
 The script refreshes Proxmox's official system-template catalog, selects the latest Debian 12 standard template, and downloads it with `pveam` if it is not already on the selected template storage. It selects the next free CT ID and asks for template storage, root-disk storage, bridge, network configuration, SSH public-key path, and CT resource limits. Review the printed CT ID, selected template, and resources before confirming creation. Defaults are 1 CPU core, 1 GiB RAM, 512 MiB swap, 8 GiB root disk, DHCP, and start-at-boot. For a static IPv4 setup, enter a full `net0` value such as `name=eth0,bridge=vmbr0,ip=192.0.2.20/24,gw=192.0.2.1`.
 
